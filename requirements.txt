@@ -1,0 +1,4 @@
+biopython>=1.83
+scholarly>=1.7.11
+chromadb>=0.5
+ollama>=0.3
