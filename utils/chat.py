@@ -44,12 +44,31 @@ _GET_READ_IDS = """
 SELECT DISTINCT paper_id FROM paper_interactions WHERE status = 'read';
 """
 
-_GET_ALL_SUGGESTED = """
-SELECT p.id, p.title, p.authors, p.year, p.journal, p.doi, p.url,
-       pi.status, pi.interacted_at
+# Colour codes (no external dependency)
+_C_RESET    = "\033[0m"
+_C_BOLD     = "\033[1m"
+_C_DIM      = "\033[2m"    # timestamp
+_C_CYAN     = "\033[36m"   # suggested label
+_C_GREEN    = "\033[32m"   # read label
+_C_YELLOW   = "\033[33m"   # You: prompt
+_C_BLUE     = "\033[94m"   # Assistant: prefix
+_C_RED      = "\033[31m"   # errors
+_C_MAGENTA  = "\033[35m"   # banner / accents
+_C_TITLE    = "\033[97m"   # paper title (bright white)
+
+# For each paper return its effective status (read beats suggested) and the
+# timestamp of that status row, ordered newest-first.
+_GET_ALL_INTERACTIONS = """
+SELECT p.id, p.title, p.authors, p.year, p.journal,
+       CASE WHEN r.paper_id IS NOT NULL THEN 'read' ELSE 'suggested' END
+           AS effective_status,
+       CASE WHEN r.paper_id IS NOT NULL THEN r.interacted_at
+            ELSE s.interacted_at
+       END AS status_at
 FROM papers p
-JOIN paper_interactions pi ON pi.paper_id = p.id
-ORDER BY pi.interacted_at DESC;
+JOIN  paper_interactions s ON s.paper_id = p.id AND s.status = 'suggested'
+LEFT JOIN paper_interactions r ON r.paper_id = p.id AND r.status = 'read'
+ORDER BY status_at DESC;
 """
 
 
@@ -181,21 +200,26 @@ def start_chat(config: dict) -> None:
         conn.commit()
 
     def print_status() -> None:
-        """Print all papers that have been suggested or read this session."""
+        """Print all papers in reverse-chronological order with status labels."""
         conn.row_factory = sqlite3.Row
-        cursor = conn.execute(_GET_ALL_SUGGESTED)
-        rows = cursor.fetchall()
+        rows = conn.execute(_GET_ALL_INTERACTIONS).fetchall()
         conn.row_factory = None
+
         if not rows:
             print("No papers have been suggested yet.\n")
             return
-        print("\n--- Paper Interaction History ---")
+
+        print(f"\n{_C_BOLD}--- Paper Interaction History ---{_C_RESET}")
         for row in rows:
-            status_label = "READ" if row["status"] == "read" else "suggested"
-            print(
-                f"  [{status_label}] {row['title']} "
-                f"({row['year'] or 'n/a'}) – {row['journal'] or ''}"
-            )
+            ts     = row["status_at"] or "unknown time"
+            status = row["effective_status"]
+            if status == "read":
+                label = f"{_C_GREEN}[read]{_C_RESET}"
+            else:
+                label = f"{_C_CYAN}[suggested]{_C_RESET}"
+            title   = f"{_C_TITLE}{row['title']}{_C_RESET}"
+            meta    = f"({row['year'] or 'n/a'}) – {row['journal'] or ''}"
+            print(f"  {_C_DIM}[{ts}]{_C_RESET} {label} {title} {meta}")
         print()
 
     # ------------------------------------------------------------------
@@ -266,23 +290,23 @@ def start_chat(config: dict) -> None:
     conversation: list[dict] = [{"role": "system", "content": system_prompt}]
     last_suggested: list[dict] = []
 
-    print("\n=== Paper Discovery Chat ===")
-    print(f"  Model      : {chat_model}")
-    print(f"  Embedding  : {embedding_model}")
-    print(f"  Papers in DB: {total_vectors}")
+    print(f"\n{_C_BOLD}{_C_MAGENTA}=== Paper Discovery Chat ==={_C_RESET}")
+    print(f"  {_C_DIM}Model      :{_C_RESET} {chat_model}")
+    print(f"  {_C_DIM}Embedding  :{_C_RESET} {embedding_model}")
+    print(f"  {_C_DIM}Papers in DB:{_C_RESET} {total_vectors}")
     print()
-    print("Commands:")
-    print("  mark read <n>  – mark paper #n from the last batch as read")
-    print("  status         – show all suggested / read papers")
-    print("  quit / exit    – end the session")
+    print(f"{_C_BOLD}Commands:{_C_RESET}")
+    print(f"  {_C_CYAN}mark read <n>{_C_RESET}  – mark paper #n from the last batch as read")
+    print(f"  {_C_CYAN}status{_C_RESET}         – show all suggested / read papers")
+    print(f"  {_C_CYAN}quit / exit{_C_RESET}    – end the session")
     print()
 
     try:
         while True:
             try:
-                user_input = input("You: ").strip()
+                user_input = input(f"{_C_BOLD}{_C_YELLOW}You:{_C_RESET} ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\nExiting chat.")
+                print(f"\n{_C_DIM}Exiting chat.{_C_RESET}")
                 break
 
             if not user_input:
@@ -292,7 +316,7 @@ def start_chat(config: dict) -> None:
             lower = user_input.lower()
 
             if lower in ("quit", "exit"):
-                print("Goodbye!")
+                print(f"{_C_DIM}Goodbye!{_C_RESET}")
                 break
 
             if lower == "status":
@@ -307,14 +331,14 @@ def start_chat(config: dict) -> None:
                         pid = int(last_suggested[idx]["chroma_id"])
                         mark_paper_read(pid)
                         title = last_suggested[idx]["meta"].get("title", f"#{idx + 1}")
-                        print(f'Marked as read: "{title}"\n')
+                        print(f"{_C_GREEN}Marked as read:{_C_RESET} \"{title}\"\n")
                     else:
                         print(
-                            f"Invalid number. The last batch had "
+                            f"{_C_RED}Invalid number.{_C_RESET} The last batch had "
                             f"{len(last_suggested)} paper(s).\n"
                         )
                 else:
-                    print("Usage: mark read <n>   e.g.  mark read 2\n")
+                    print(f"{_C_DIM}Usage: mark read <n>   e.g.  mark read 2{_C_RESET}\n")
                 continue
 
             # ---- vector retrieval -----------------------------------------
@@ -348,12 +372,12 @@ def start_chat(config: dict) -> None:
                 assistant_text: str = resp["message"]["content"]
             except Exception as exc:  # noqa: BLE001
                 logger.error("Ollama chat error: %s", exc)
-                print(f"\n[Error] Could not get a response: {exc}\n")
+                print(f"\n{_C_BOLD}{_C_RED}[Error]{_C_RESET} Could not get a response: {exc}\n")
                 conversation.pop()  # roll back the failed turn
                 continue
 
             conversation.append({"role": "assistant", "content": assistant_text})
-            print(f"\nAssistant: {assistant_text}\n")
+            print(f"\n{_C_BOLD}{_C_BLUE}Assistant:{_C_RESET} {assistant_text}\n")
 
     finally:
         conn.close()
