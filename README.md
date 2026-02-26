@@ -355,7 +355,6 @@ Settings for the interactive AI chat assistant.
   "chat_model":      "llama3",
   "embedding_model": "nomic-embed-text",
   "top_k":           5,
-  "system_prompt":   "You are a helpful academic research assistant..."
 }
 ```
 
@@ -365,22 +364,6 @@ Settings for the interactive AI chat assistant.
 | `chat_model` | `llama3` | Ollama chat model to use. Any instruction-tuned model works; larger models give richer responses. |
 | `embedding_model` | `nomic-embed-text` | Embedding model used to encode the user's query for vector search. Should match the model used during `vectorize`. |
 | `top_k` | `5` | Number of papers to retrieve from ChromaDB per query and present to the model as context. Increase for broader coverage; decrease for more focused answers. |
-| `system_prompt` | *(see below)* | The system-level instruction given to the chat model at the start of every session. Edit this to change the assistant's persona, focus area, or output style. |
-
-**Customising the system prompt**
-
-The `system_prompt` shapes how the model introduces and discusses papers. Examples:
-
-```json
-// Brief, bullet-point style
-"system_prompt": "You are a concise research assistant. For each relevant paper, output a single bullet point with the title, year, and one sentence summary. Do not fabricate papers outside the provided context."
-
-// Domain-specific
-"system_prompt": "You are an expert in antimicrobial resistance. When presented with relevant papers, focus on resistance mechanisms, resistance genes identified, and clinical implications. Be precise and technical."
-
-// Conversational / onboarding
-"system_prompt": "You are a friendly research mentor helping a graduate student discover literature. Explain each paper in plain language, highlight why it might be interesting to read in full, and suggest follow-up questions the student could explore."
-```
 
 ---
 

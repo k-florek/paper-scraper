@@ -43,7 +43,6 @@
     "ollama_host": "http://localhost:11434",
     "chat_model": "llama3",
     "embedding_model": "nomic-embed-text",
-    "top_k": 5,
-    "system_prompt": "You are a helpful academic research assistant. You have access to a curated database of scientific papers. When the user asks about a topic, relevant papers from the database will be provided as context. Introduce each suggested paper, explain why it is relevant, and highlight key findings. Be concise and scholarly. Do not fabricate papers or citations outside the provided context."
+    "top_k": 5
   }
 }
