@@ -44,6 +44,22 @@ _GET_READ_IDS = """
 SELECT DISTINCT paper_id FROM paper_interactions WHERE status = 'read';
 """
 
+_RESET_ALL = """
+DELETE FROM paper_interactions;
+"""
+
+_RESET_ALL_STATUS = """
+DELETE FROM paper_interactions WHERE status = ?;
+"""
+
+_RESET_PAPER = """
+DELETE FROM paper_interactions WHERE paper_id = ?;
+"""
+
+_RESET_PAPER_STATUS = """
+DELETE FROM paper_interactions WHERE paper_id = ? AND status = ?;
+"""
+
 # Colour codes (no external dependency)
 _C_RESET    = "\033[0m"
 _C_BOLD     = "\033[1m"
@@ -126,13 +142,17 @@ def start_chat(config: dict) -> None:
     system_prompt: str = chat_cfg.get(
         "system_prompt",
         (
-            "You are a helpful academic research assistant. "
-            "You have access to a curated database of scientific papers. "
-            "When the user asks about a topic, relevant papers from the database "
-            "will be provided to you as context. Introduce each paper clearly, "
-            "explain why it is relevant to the user's query, and highlight key "
-            "findings or contributions. Be concise and scholarly in tone. "
-            "Do not fabricate papers or citations outside the provided context."
+"""
+You are a helpful academic researcher. You have access to a curated database of scientific papers. When papers are provided to you as context, select the 1 to 3 papers that are most relevant to the user's query and recommend only those. Each paper in the context is identified by a unique tag of the form [ID:number]. Do not recommend papers that are not a good match.
+
+For each recommended paper you MUST use EXACTLY this format and no other:
+
+[ID:number] <title of the paper>
+URL: <url of the paper, or "N/A" if not available>
+<explanation of why this paper is relevant to the user's query>
+
+Do not add any other fields, headers, or prose outside this structure. Do not alter or omit the [ID:number] tag. Do not alter the URL. CRITICAL: the relevance explanation MUST be derived exclusively from the abstract text provided in the context. Do NOT draw on your training knowledge to add, infer, or embellish any findings, methods, conclusions, or claims not explicitly stated in the provided abstract. If no abstract is available, state that in the explanation. Do not fabricate papers or citations outside the provided context.
+"""
         ),
     )
 
@@ -198,6 +218,24 @@ def start_chat(config: dict) -> None:
             [(paper_id, "suggested"), (paper_id, "read")],
         )
         conn.commit()
+
+    def reset_paper(paper_id: int, status: str | None = None) -> int:
+        """Delete interaction rows for one paper. Returns rows deleted."""
+        if status:
+            cur = conn.execute(_RESET_PAPER_STATUS, (paper_id, status))
+        else:
+            cur = conn.execute(_RESET_PAPER, (paper_id,))
+        conn.commit()
+        return cur.rowcount
+
+    def reset_all(status: str | None = None) -> int:
+        """Delete all interaction rows (optionally filtered by status). Returns rows deleted."""
+        if status:
+            cur = conn.execute(_RESET_ALL_STATUS, (status,))
+        else:
+            cur = conn.execute(_RESET_ALL)
+        conn.commit()
+        return cur.rowcount
 
     def print_status() -> None:
         """Print all papers in reverse-chronological order with status labels."""
@@ -266,11 +304,12 @@ def start_chat(config: dict) -> None:
     # ------------------------------------------------------------------
 
     def format_papers_context(papers: list[dict]) -> str:
-        """Return a numbered plain-text block describing *papers*."""
+        """Return a tagged plain-text block describing *papers*."""
         lines: list[str] = []
-        for i, p in enumerate(papers, 1):
+        for p in papers:
             meta = p["meta"]
-            lines.append(f"[{i}] {meta.get('title', 'Unknown title')}")
+            tag = f"[ID:{p['chroma_id']}]"
+            lines.append(f"{tag} {meta.get('title', 'Unknown title')}")
             if meta.get("authors"):
                 lines.append(f"    Authors : {meta['authors']}")
             if meta.get("year"):
@@ -281,6 +320,18 @@ def start_chat(config: dict) -> None:
                 lines.append(f"    DOI     : {meta['doi']}")
             if meta.get("url"):
                 lines.append(f"    URL     : {meta['url']}")
+            # Include the full document text (abstract + keywords) so the LLM
+            # has actual content to discuss and reference for each paper.
+            doc = p.get("doc", "")
+            if doc:
+                # Strip the title line that is already shown above, then indent
+                doc_body = "\n".join(
+                    line for line in doc.splitlines()
+                    if not line.startswith("Title:")
+                ).strip()
+                if doc_body:
+                    indented = "\n".join(f"    {line}" for line in doc_body.splitlines())
+                    lines.append(indented)
             lines.append("")
         return "\n".join(lines)
 
@@ -288,7 +339,7 @@ def start_chat(config: dict) -> None:
     # Interactive REPL
     # ------------------------------------------------------------------
     conversation: list[dict] = [{"role": "system", "content": system_prompt}]
-    last_suggested: list[dict] = []
+    last_suggested_by_id: dict[str, dict] = {}
 
     print(f"\n{_C_BOLD}{_C_MAGENTA}=== Paper Discovery Chat ==={_C_RESET}")
     print(f"  {_C_DIM}Model      :{_C_RESET} {chat_model}")
@@ -296,9 +347,11 @@ def start_chat(config: dict) -> None:
     print(f"  {_C_DIM}Papers in DB:{_C_RESET} {total_vectors}")
     print()
     print(f"{_C_BOLD}Commands:{_C_RESET}")
-    print(f"  {_C_CYAN}mark read <n>{_C_RESET}  – mark paper #n from the last batch as read")
-    print(f"  {_C_CYAN}status{_C_RESET}         – show all suggested / read papers")
-    print(f"  {_C_CYAN}quit / exit{_C_RESET}    – end the session")
+    print(f"  {_C_CYAN}mark read <ID>{_C_RESET}                    – mark a paper as read using its [ID:number]")
+    print(f"  {_C_CYAN}reset <ID> suggested|read{_C_RESET}         – reset one status for one paper")
+    print(f"  {_C_CYAN}reset all suggested|read{_C_RESET}           – reset one status for all papers")
+    print(f"  {_C_CYAN}status{_C_RESET}                      – show all suggested / read papers")
+    print(f"  {_C_CYAN}quit / exit{_C_RESET}                 – end the session")
     print()
 
     try:
@@ -323,22 +376,50 @@ def start_chat(config: dict) -> None:
                 print_status()
                 continue
 
+            if lower.startswith("reset"):
+                parts = lower.split()
+                # Status is required
+                status_filter: str | None = parts[-1] if len(parts) >= 2 and parts[-1] in ("suggested", "read") else None
+
+                if status_filter is None:
+                    print(
+                        f"{_C_DIM}Usage:\n"
+                        f"  reset all suggested|read\n"
+                        f"  reset <ID> suggested|read{_C_RESET}\n"
+                    )
+                elif len(parts) == 3 and parts[1] == "all":
+                    n = reset_all(status_filter)
+                    print(f"{_C_YELLOW}Reset '{status_filter}' for all papers ({n} row(s) removed).{_C_RESET}\n")
+                elif len(parts) == 3 and parts[1].isdigit():
+                    cid = int(parts[1])
+                    n = reset_paper(cid, status_filter)
+                    if n:
+                        print(f"{_C_YELLOW}Reset '{status_filter}' for paper ID {cid} ({n} row(s) removed).{_C_RESET}\n")
+                    else:
+                        print(f"{_C_RED}No '{status_filter}' interaction found for paper ID {cid}.{_C_RESET}\n")
+                else:
+                    print(
+                        f"{_C_DIM}Usage:\n"
+                        f"  reset all suggested|read\n"
+                        f"  reset <ID> suggested|read{_C_RESET}\n"
+                    )
+                continue
+
             if lower.startswith("mark read"):
                 parts = lower.split()
                 if len(parts) == 3 and parts[2].isdigit():
-                    idx = int(parts[2]) - 1
-                    if 0 <= idx < len(last_suggested):
-                        pid = int(last_suggested[idx]["chroma_id"])
-                        mark_paper_read(pid)
-                        title = last_suggested[idx]["meta"].get("title", f"#{idx + 1}")
+                    cid = parts[2]
+                    if cid in last_suggested_by_id:
+                        mark_paper_read(int(cid))
+                        title = last_suggested_by_id[cid]["meta"].get("title", f"ID:{cid}")
                         print(f"{_C_GREEN}Marked as read:{_C_RESET} \"{title}\"\n")
                     else:
                         print(
-                            f"{_C_RED}Invalid number.{_C_RESET} The last batch had "
-                            f"{len(last_suggested)} paper(s).\n"
+                            f"{_C_RED}ID {cid} not found{_C_RESET} in the last batch of "
+                            f"suggestions. Use the [ID:number] shown in the response.\n"
                         )
                 else:
-                    print(f"{_C_DIM}Usage: mark read <n>   e.g.  mark read 2{_C_RESET}\n")
+                    print(f"{_C_DIM}Usage: mark read <ID>   e.g.  mark read 42{_C_RESET}\n")
                 continue
 
             # ---- vector retrieval -----------------------------------------
@@ -347,35 +428,63 @@ def start_chat(config: dict) -> None:
             last_suggested = papers
 
             if papers:
-                mark_papers_suggested([int(p["chroma_id"]) for p in papers])
                 context_block = (
-                    "The following papers were retrieved from the vector database "
-                    "as relevant to the user's query:\n\n"
+                    f"The following {len(papers)} paper(s) were retrieved from the "
+                    "vector database as relevant to the user's query. "
+                    "Select the 1 to 3 most relevant papers and recommend only those. "
+                    "Each paper is identified by its unique [ID:number] tag — you MUST "
+                    "use that exact tag when referencing it in your response:\n\n"
                     + format_papers_context(papers)
                 )
-                user_message = (
+                # Full message sent to the LLM for this turn (includes abstracts).
+                llm_user_message = (
                     f"{context_block}\n"
                     f"User message: {user_input}"
                 )
             else:
-                user_message = (
+                llm_user_message = (
                     "No new matching papers were found in the database – "
                     "all relevant papers may have already been suggested or read.\n\n"
                     f"User message: {user_input}"
                 )
 
-            conversation.append({"role": "user", "content": user_message})
+            # Build the messages list for this inference call: history + current
+            # full message.  We do NOT store the bulky context block in history;
+            # only the bare user query is kept so the conversation stays within
+            # the model's context window across multiple turns.
+            inference_messages = conversation + [{"role": "user", "content": llm_user_message}]
 
             # ---- LLM call -------------------------------------------------
             try:
-                resp = oll.chat(model=chat_model, messages=conversation)
+                resp = oll.chat(model=chat_model, messages=inference_messages)
                 assistant_text: str = resp["message"]["content"]
             except Exception as exc:  # noqa: BLE001
                 logger.error("Ollama chat error: %s", exc)
                 print(f"\n{_C_BOLD}{_C_RED}[Error]{_C_RESET} Could not get a response: {exc}\n")
-                conversation.pop()  # roll back the failed turn
                 continue
 
+            # Resolve [ID:xxx] tags in the response to actual papers.
+            import re as _re
+            papers_by_id = {p["chroma_id"]: p for p in papers} if papers else {}
+            # Collect cited IDs in order of first appearance (deduped).
+            seen_ids: list[str] = []
+            seen_set: set[str] = set()
+            for _m in _re.finditer(r'\[ID:(\d+)\]', assistant_text):
+                _cid = _m.group(1)
+                if _cid in papers_by_id and _cid not in seen_set:
+                    seen_ids.append(_cid)
+                    seen_set.add(_cid)
+
+            # Mark only the cited papers as suggested and update last_suggested_by_id
+            # so 'mark read <ID>' can look up by chroma ID.
+            if seen_ids:
+                mark_papers_suggested([int(cid) for cid in seen_ids])
+                last_suggested_by_id = {cid: papers_by_id[cid] for cid in seen_ids}
+            else:
+                last_suggested_by_id = {}
+
+            # Persist only the compact user query + assistant reply to history.
+            conversation.append({"role": "user", "content": user_input})
             conversation.append({"role": "assistant", "content": assistant_text})
             print(f"\n{_C_BOLD}{_C_BLUE}Assistant:{_C_RESET} {assistant_text}\n")
 
