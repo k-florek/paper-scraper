@@ -143,15 +143,33 @@ def start_chat(config: dict) -> None:
         "system_prompt",
         (
 """
-You are a helpful academic researcher. You have access to a curated database of scientific papers. When papers are provided to you as context, select the 1 to 3 papers that are most relevant to the user's query and recommend only those. Each paper in the context is identified by a unique tag of the form [ID:number]. Do not recommend papers that are not a good match.
+You are a precise academic retrieval system. Your sole function is to map user queries to papers from the provided context.
 
-For each recommended paper you MUST use EXACTLY this format and no other:
+**Input Format**
+You will receive:
+1. A user query
+2. A list of papers, each tagged as [ID:number] and containing metadata (title, URL, abstract)
 
-[ID:number] <title of the paper>
-URL: <url of the paper, or "N/A" if not available>
-<explanation of why this paper is relevant to the user's query>
+**Selection Criteria (Ranked)**
+1. Select **0 to 3** papers. If none directly address the query, select **zero**.
+2. Prioritize papers where the abstract explicitly mentions the query's key concepts, methods, or organisms.
+3. Do not select papers based on journal prestige, citation count, or your training knowledge about the paper's importance.
 
-Do not add any other fields, headers, or prose outside this structure. Do not alter or omit the [ID:number] tag. Do not alter the URL. CRITICAL: the relevance explanation MUST be derived exclusively from the abstract text provided in the context. Do NOT draw on your training knowledge to add, infer, or embellish any findings, methods, conclusions, or claims not explicitly stated in the provided abstract. If no abstract is available, state that in the explanation. Do not fabricate papers or citations outside the provided context.
+**Output Rules**
+- If no papers match: output exactly `Sorry I was unable to find any relevant papers.` and stop.
+- If papers match: output **only** the following block for each, with no headers, footers, or introductory text:
+
+[ID:number] <exact title from context>
+URL: <exact URL from context, or "N/A" if missing or malformed>
+Relevance: <one concise sentence explaining why this paper matches the query>
+
+**Critical Constraints**
+- The "Relevance" sentence must cite specific phrases from the abstract (e.g., "Abstract states: '...'").
+- Do not infer, extrapolate, or add facts not present in the provided abstract text.
+- Do not summarize the paper's conclusions; only explain the match to the user's query.
+- If the abstract is truncated (e.g., ends with "..."), use only the provided text.
+- Preserve the [ID:number] tag exactly as given, including brackets and colon.
+- Do not format the output as markdown code blocks, bullet lists, or JSON.
 """
         ),
     )
@@ -347,11 +365,11 @@ Do not add any other fields, headers, or prose outside this structure. Do not al
     print(f"  {_C_DIM}Papers in DB:{_C_RESET} {total_vectors}")
     print()
     print(f"{_C_BOLD}Commands:{_C_RESET}")
-    print(f"  {_C_CYAN}mark read <ID>{_C_RESET}                    – mark a paper as read using its [ID:number]")
-    print(f"  {_C_CYAN}reset <ID> suggested|read{_C_RESET}         – reset one status for one paper")
-    print(f"  {_C_CYAN}reset all suggested|read{_C_RESET}           – reset one status for all papers")
-    print(f"  {_C_CYAN}status{_C_RESET}                      – show all suggested / read papers")
-    print(f"  {_C_CYAN}quit / exit{_C_RESET}                 – end the session")
+    print(f"  {_C_CYAN}mark read <ID>{_C_RESET}                    - mark a paper as read using its [ID:number]")
+    print(f"  {_C_CYAN}reset <ID> suggested|read{_C_RESET}         - reset one status for one paper")
+    print(f"  {_C_CYAN}reset all suggested|read{_C_RESET}           - reset one status for all papers")
+    print(f"  {_C_CYAN}status{_C_RESET}                      - show all suggested / read papers")
+    print(f"  {_C_CYAN}quit / exit{_C_RESET}                 - end the session")
     print()
 
     try:
@@ -431,7 +449,6 @@ Do not add any other fields, headers, or prose outside this structure. Do not al
                 context_block = (
                     f"The following {len(papers)} paper(s) were retrieved from the "
                     "vector database as relevant to the user's query. "
-                    "Select the 1 to 3 most relevant papers and recommend only those. "
                     "Each paper is identified by its unique [ID:number] tag — you MUST "
                     "use that exact tag when referencing it in your response:\n\n"
                     + format_papers_context(papers)
@@ -486,7 +503,7 @@ Do not add any other fields, headers, or prose outside this structure. Do not al
             # Persist only the compact user query + assistant reply to history.
             conversation.append({"role": "user", "content": user_input})
             conversation.append({"role": "assistant", "content": assistant_text})
-            print(f"\n{_C_BOLD}{_C_BLUE}Assistant:{_C_RESET} {assistant_text}\n")
+            print(f"\n{_C_BOLD}{_C_BLUE}Paper Pal:{_C_RESET} {assistant_text}\n")
 
     finally:
         conn.close()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main.py – Entry point for the paper scraper.
+main.py - Entry point for paper pal.
 
 Usage:
     python main.py scrape                        # scrape papers into SQLite
@@ -150,7 +150,7 @@ def cmd_vectorize(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Paper scraper – scrape, vectorize, and chat about academic papers.",
+        description="Paper Pal - scrape, vectorize, and chat about academic papers.",
     )
     parser.add_argument(
         "--config",

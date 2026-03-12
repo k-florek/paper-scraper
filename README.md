@@ -1,4 +1,4 @@
-# paper-scraper
+# Paper Pal
 
 An automated academic paper pipeline that scrapes papers from PubMed (and optionally Google Scholar), stores them in a local SQLite database, embeds them into a ChromaDB vector store using an Ollama embedding model, and provides an interactive AI chat assistant for exploring the collection.
 
@@ -34,8 +34,8 @@ An automated academic paper pipeline that scrapes papers from PubMed (and option
 
 ```bash
 # 1. clone and enter the project
-git clone <repo-url> paper-scraper
-cd paper-scraper
+git clone <repo-url> paper-pal
+cd paper-pal
 
 # 2. create a Python virtual environment and install dependencies
 python3 -m venv .venv
@@ -51,10 +51,10 @@ cp config.example.json config.json
 # → edit config.json: set your PubMed email, keywords, desired models, etc.
 
 # 5. scrape papers and build the vector database
-./paper-scraper-build
+./paper-pal-build
 
 # 6. start the interactive AI chat
-./paper-scraper
+./paper-pal
 ```
 
 ---
@@ -173,7 +173,7 @@ At a minimum, set your **PubMed email address** and choose your **search keyword
 ### Scrape & build the vector database
 
 ```bash
-./paper-scraper-build
+./paper-pal-build
 ```
 
 This script runs two steps in sequence:
@@ -184,13 +184,13 @@ This script runs two steps in sequence:
 Pass a custom config file to both steps:
 
 ```bash
-./paper-scraper-build --config my_config.json
+./paper-pal-build --config my_config.json
 ```
 
 ### Interactive paper discovery chat
 
 ```bash
-./paper-scraper
+./paper-pal
 ```
 
 This starts a REPL session where you can ask free-form questions about topics you are interested in. The assistant will retrieve the most similar papers from the vector database and present them with a brief explanation of their relevance.
@@ -370,10 +370,10 @@ Settings for the interactive AI chat assistant.
 ## Project structure
 
 ```
-paper-scraper/
+paper-pal/
 ├── main.py                  # CLI entry point (scrape / vectorize / chat)
-├── paper-scraper-build      # Shell script: runs scrape then vectorize
-├── paper-scraper            # Shell script: starts the chat session
+├── paper-pal-build          # Shell script: runs scrape then vectorize
+├── paper-pal                # Shell script: starts the chat session
 ├── config.json              # Your local configuration (not committed)
 ├── config.example.json      # Template configuration
 ├── requirements.txt         # Python dependencies
