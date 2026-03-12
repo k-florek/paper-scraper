@@ -453,10 +453,19 @@ Relevance: <one concise sentence explaining why this paper matches the query>
                     "use that exact tag when referencing it in your response:\n\n"
                     + format_papers_context(papers)
                 )
+                format_reminder = (
+                    "\nREMINDER — follow the output rules from your system instructions exactly.\n"
+                    "For each matching paper output ONLY these three lines, with no other text:\n"
+                    "[ID:number] <exact title from context>\n"
+                    "URL: <exact URL from context, or \"N/A\">\n"
+                    "Relevance: <one sentence citing the abstract>\n"
+                    "If no papers match, output exactly: Sorry I was unable to find any relevant papers."
+                )
                 # Full message sent to the LLM for this turn (includes abstracts).
                 llm_user_message = (
                     f"{context_block}\n"
                     f"User message: {user_input}"
+                    f"{format_reminder}"
                 )
             else:
                 llm_user_message = (
